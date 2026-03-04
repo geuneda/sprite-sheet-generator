@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 
-export const maxDuration = 60;
-
 export async function POST(request: Request) {
   const webhookUrl = process.env.N8N_WEBHOOK_URL;
 
@@ -39,8 +37,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const data = await response.json();
-    return NextResponse.json(data);
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { executionId: text.trim() };
+    }
+
+    return NextResponse.json({
+      success: true,
+      executionId: data.executionId || "unknown",
+      status: "processing",
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 interface SpriteResult {
   success: boolean;
@@ -15,13 +15,33 @@ const SPRITE_TYPES = [
   { key: "walk", label: "Walk", description: "4-frame walk cycle" },
 ] as const;
 
+type GenerationPhase = "idle" | "uploading" | "processing" | "completed" | "error";
+
 export default function SpriteGenerator() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [result, setResult] = useState<SpriteResult | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [phase, setPhase] = useState<GenerationPhase>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => stopPolling();
+  }, [stopPolling]);
 
   const handleFileSelect = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) {
@@ -32,6 +52,7 @@ export default function SpriteGenerator() {
     setPreviewUrl(URL.createObjectURL(file));
     setResult(null);
     setError(null);
+    setPhase("idle");
   }, []);
 
   const handleDrop = useCallback(
@@ -43,12 +64,45 @@ export default function SpriteGenerator() {
     [handleFileSelect]
   );
 
+  const pollStatus = useCallback((executionId: string) => {
+    const startTime = Date.now();
+
+    timerRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    pollingRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/status?executionId=${executionId}`);
+        const data = await res.json();
+
+        if (data.status === "completed" && data.sprites) {
+          stopPolling();
+          setResult({ success: true, sprites: data.sprites });
+          setPhase("completed");
+          return;
+        }
+
+        if (data.status === "error") {
+          stopPolling();
+          setError(data.error || "Generation failed");
+          setPhase("error");
+          return;
+        }
+      } catch {
+        // Polling error - keep trying
+      }
+    }, 5000);
+  }, [stopPolling]);
+
   const handleGenerate = async () => {
     if (!selectedFile) return;
 
-    setIsLoading(true);
+    stopPolling();
+    setPhase("uploading");
     setError(null);
     setResult(null);
+    setElapsed(0);
 
     try {
       const formData = new FormData();
@@ -59,18 +113,19 @@ export default function SpriteGenerator() {
         body: formData,
       });
 
-      const data: SpriteResult = await response.json();
+      const data = await response.json();
 
       if (!data.success) {
-        setError(data.error || "Generation failed");
+        setError(data.error || "Failed to start generation");
+        setPhase("error");
         return;
       }
 
-      setResult(data);
+      setPhase("processing");
+      pollStatus(data.executionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
-    } finally {
-      setIsLoading(false);
+      setPhase("error");
     }
   };
 
@@ -80,6 +135,8 @@ export default function SpriteGenerator() {
     link.download = `${name}_sprite_sheet.png`;
     link.click();
   };
+
+  const isLoading = phase === "uploading" || phase === "processing";
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-12">
@@ -166,9 +223,21 @@ export default function SpriteGenerator() {
       {isLoading && (
         <div className="text-center py-12">
           <div className="inline-block w-10 h-10 border-4 border-[#2a2a2a] border-t-[#6366f1] rounded-full animate-spin mb-4" />
-          <p className="text-[#737373] animate-pulse-slow">
-            Generating 4 sprite sheets with AI... This may take up to 60 seconds.
+          <p className="text-[#737373] mb-2">
+            {phase === "uploading"
+              ? "Uploading image..."
+              : "Generating 4 sprite sheets with AI..."}
           </p>
+          <p className="text-[#525252] text-sm">
+            {elapsed > 0 && `${elapsed}s elapsed`}
+            {phase === "processing" && " - Checking every 5 seconds"}
+          </p>
+          <div className="mt-4 w-64 mx-auto bg-[#1a1a1a] rounded-full h-1.5 overflow-hidden">
+            <div
+              className="h-full bg-[#6366f1] rounded-full transition-all duration-1000"
+              style={{ width: `${Math.min((elapsed / 120) * 100, 95)}%` }}
+            />
+          </div>
         </div>
       )}
 
