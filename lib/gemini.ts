@@ -25,7 +25,7 @@ function getGridTemplateBase64(): Promise<string> {
 }
 
 function getModelId(): string {
-  return process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  return process.env.GEMINI_MODEL || "gemini-3-pro-image-preview";
 }
 
 export interface SpriteResult {
