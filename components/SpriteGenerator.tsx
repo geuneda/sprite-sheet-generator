@@ -3,13 +3,30 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { compressImage } from "@/lib/image-compress";
 
-const SPRITE_TYPES = [
-  { key: "attack", label: "Attack", description: "4-frame attack animation" },
-  { key: "jump", label: "Jump", description: "4-frame jump animation" },
-  { key: "idle", label: "Idle", description: "4-frame idle/breathing animation" },
-  { key: "walk", label: "Walk", description: "4-frame walk cycle" },
+const TABS = [
+  {
+    key: "side-view",
+    label: "Side View",
+    description: "Generate 4 animation types (side-facing character)",
+    spriteTypes: [
+      { key: "attack", label: "Attack", description: "4-frame attack animation" },
+      { key: "jump", label: "Jump", description: "4-frame jump animation" },
+      { key: "idle", label: "Idle", description: "4-frame idle/breathing animation" },
+      { key: "walk", label: "Walk", description: "4-frame walk cycle" },
+    ],
+  },
+  {
+    key: "back-view",
+    label: "Back View (Top-Down)",
+    description: "Generate 2 animation types (character facing upward, back view)",
+    spriteTypes: [
+      { key: "idle_back", label: "Idle (Back)", description: "4-frame idle animation (back view, facing up)" },
+      { key: "attack_up", label: "Attack (Up)", description: "4-frame upward attack animation (back view)" },
+    ],
+  },
 ] as const;
 
+type TabKey = (typeof TABS)[number]["key"];
 type Phase = "idle" | "compressing" | "processing" | "completed" | "error";
 
 interface SpriteState {
@@ -19,6 +36,7 @@ interface SpriteState {
 }
 
 export default function SpriteGenerator() {
+  const [activeTab, setActiveTab] = useState<TabKey>("side-view");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [sprites, setSprites] = useState<Record<string, SpriteState>>({});
@@ -30,6 +48,9 @@ export default function SpriteGenerator() {
   const previewUrlRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  const currentTab = TABS.find((t) => t.key === activeTab)!;
+  const spriteTypes = currentTab.spriteTypes;
+
   useEffect(() => {
     return () => {
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -37,6 +58,15 @@ export default function SpriteGenerator() {
       abortRef.current?.abort();
     };
   }, []);
+
+  const handleTabChange = (tabKey: TabKey) => {
+    if (isLoading) return;
+    setActiveTab(tabKey);
+    setSprites({});
+    setPhase("idle");
+    setError(null);
+    setElapsed(0);
+  };
 
   const handleFileSelect = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) {
@@ -74,7 +104,7 @@ export default function SpriteGenerator() {
     setElapsed(0);
 
     const initial: Record<string, SpriteState> = {};
-    for (const { key } of SPRITE_TYPES) {
+    for (const { key } of spriteTypes) {
       initial[key] = { status: "generating", image: null, error: null };
     }
     setSprites(initial);
@@ -94,7 +124,7 @@ export default function SpriteGenerator() {
       setElapsed(Math.floor((Date.now() - startTime) / 1000));
     }, 1000);
 
-    const promises = SPRITE_TYPES.map(async ({ key }) => {
+    const promises = spriteTypes.map(async ({ key }) => {
       const formData = new FormData();
       formData.append("image", compressed);
       formData.append("spriteType", key);
@@ -145,14 +175,38 @@ export default function SpriteGenerator() {
   const completedCount = Object.values(sprites).filter(
     (s) => s.status === "completed",
   ).length;
+  const totalCount = spriteTypes.length;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-12">
       <div className="text-center mb-10">
         <h1 className="text-4xl font-bold mb-3">Sprite Sheet Generator</h1>
         <p className="text-[#737373] text-lg">
-          Upload a character reference image to generate 4 animation sprite sheets
+          Upload a character reference image to generate animation sprite sheets
         </p>
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="flex gap-2 mb-8 justify-center">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => handleTabChange(tab.key)}
+            disabled={isLoading}
+            className={`
+              px-6 py-3 rounded-lg font-medium transition-all duration-200 text-sm
+              ${isLoading ? "cursor-not-allowed opacity-50" : "cursor-pointer"}
+              ${
+                activeTab === tab.key
+                  ? "bg-[#6366f1] text-white"
+                  : "bg-[#1a1a1a] border border-[#2a2a2a] text-[#999] hover:border-[#6366f1] hover:text-white"
+              }
+            `}
+          >
+            <span className="block">{tab.label}</span>
+            <span className="block text-xs mt-0.5 opacity-70">{tab.description}</span>
+          </button>
+        ))}
       </div>
 
       {/* Upload Area */}
@@ -234,7 +288,7 @@ export default function SpriteGenerator() {
           <p className="text-[#737373] mb-2">
             {phase === "compressing"
               ? "Preparing image..."
-              : `Generating sprite sheets... (${completedCount}/4 completed)`}
+              : `Generating sprite sheets... (${completedCount}/${totalCount} completed)`}
           </p>
           {elapsed > 0 && (
             <p className="text-[#525252] text-sm">{elapsed}s elapsed</p>
@@ -257,8 +311,8 @@ export default function SpriteGenerator() {
               ? "Generated Sprite Sheets"
               : "Generating Sprite Sheets..."}
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {SPRITE_TYPES.map(({ key, label, description }) => {
+          <div className={`grid gap-6 ${totalCount <= 2 ? "grid-cols-1 md:grid-cols-2 max-w-3xl mx-auto" : "grid-cols-1 md:grid-cols-2"}`}>
+            {spriteTypes.map(({ key, label, description }) => {
               const sprite = sprites[key];
               if (!sprite) return null;
 

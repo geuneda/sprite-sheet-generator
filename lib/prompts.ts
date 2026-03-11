@@ -7,6 +7,8 @@ const CHROMAKEY_RULES = `CRITICAL CHROMAKEY REQUIREMENTS:
 
 const STYLE_SUFFIX = `Use detailed 32-bit pixel art style with proper shading and highlights. Same character design in all frames. Character facing right.`;
 
+const STYLE_SUFFIX_BACK = `Use detailed 32-bit pixel art style with proper shading and highlights. Same character design in all frames. Character facing upward (showing back view - we see the back of the character's head, back, and legs from behind).`;
+
 export const SPRITE_PROMPTS: Record<string, string> = {
   attack: `${SYSTEM_PREAMBLE}
 
@@ -83,4 +85,48 @@ Frame 4 (bottom-right): Legs close together, passing/crossing - transition back
 Each frame shows a different phase of the walking motion. This creates a smooth looping walk cycle.
 
 ${STYLE_SUFFIX}`,
+
+  idle_back: `${SYSTEM_PREAMBLE}
+
+Create a 4-frame pixel art idle/breathing animation sprite sheet of this character, viewed from BEHIND (back view, character facing upward/away from the camera).
+
+IMPORTANT PERSPECTIVE: The character is facing UPWARD (toward the top of the screen). We see the character's BACK - the back of their head, their back, shoulders from behind, and legs from behind. This is a top-down game where the character is at the bottom of the screen looking up at enemies approaching from above.
+
+Arrange the 4 frames in a 2x2 grid on a uniform chromakey green color background. The character is standing still with subtle idle animation, showing their BACK VIEW. Every element of the generated frame should fit inside the quadrant, with the central point of the character aligned with the central point of each quadrant.
+
+${CHROMAKEY_RULES}
+
+Top row (frames 1-2):
+Frame 1 (top-left): Neutral standing pose from behind - relaxed back view stance, we see the back of the character
+Frame 2 (top-right): Slight inhale - subtle body rise seen from behind, maybe slight shoulder movement
+
+Bottom row (frames 3-4):
+Frame 3 (bottom-left): Full breath - slight upward posture from back view
+Frame 4 (bottom-right): Exhale - returning to neutral back view, slight settle
+
+Keep movements SUBTLE - this is a gentle breathing/idle loop, not dramatic motion. Character should look alive but relaxed. MUST show the character's BACK (rear view), NOT the front.
+
+${STYLE_SUFFIX_BACK}`,
+
+  attack_up: `${SYSTEM_PREAMBLE}
+
+Create a 4-frame pixel art attack animation sprite sheet of this character, viewed from BEHIND (back view, character attacking UPWARD toward the top of the screen).
+
+IMPORTANT PERSPECTIVE: The character is facing UPWARD and attacking toward the top of the screen. We see the character's BACK - the back of their head, their back from behind. This is a top-down game where the character is at the bottom attacking enemies above. The attack motion goes UPWARD (toward the top of the image).
+
+Arrange the 4 frames in a 2x2 grid on a uniform chromakey green color background. The character is performing an upward attack from their back view - could be a sword slash upward, magic spell cast upward, upward punch, or energy blast upward depending on what suits the character best. Every element of the generated frame should fit inside the quadrant, with the central point of the character aligned with the central point of each quadrant.
+
+${CHROMAKEY_RULES}
+
+Top row (frames 1-2):
+Frame 1 (top-left): Wind-up/anticipation from back view - character preparing to attack upward, pulling back weapon or gathering energy, seen from behind
+Frame 2 (top-right): Attack in motion - striking upward, weapon or energy moving toward the top of the frame, back view
+
+Bottom row (frames 3-4):
+Frame 3 (bottom-left): Impact/peak - maximum upward extension of attack, full power directed upward, back view
+Frame 4 (bottom-right): Recovery - returning to ready stance, back view
+
+MUST show the character from BEHIND (rear view) in ALL frames. The attack direction is UPWARD (toward the top of the image). Make the attack visually dynamic and exciting.
+
+${STYLE_SUFFIX_BACK}`,
 };
