@@ -1,12 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-
-interface SpriteResult {
-  success: boolean;
-  sprites?: Record<string, string>;
-  error?: string;
-}
+import { compressImage } from "@/lib/image-compress";
 
 const SPRITE_TYPES = [
   { key: "attack", label: "Attack", description: "4-frame attack animation" },
@@ -15,42 +10,45 @@ const SPRITE_TYPES = [
   { key: "walk", label: "Walk", description: "4-frame walk cycle" },
 ] as const;
 
-type GenerationPhase = "idle" | "uploading" | "processing" | "completed" | "error";
+type Phase = "idle" | "compressing" | "processing" | "completed" | "error";
+
+interface SpriteState {
+  status: "generating" | "completed" | "error";
+  image: string | null;
+  error: string | null;
+}
 
 export default function SpriteGenerator() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [result, setResult] = useState<SpriteResult | null>(null);
-  const [phase, setPhase] = useState<GenerationPhase>("idle");
+  const [sprites, setSprites] = useState<Record<string, SpriteState>>({});
+  const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
+  const previewUrlRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    return () => stopPolling();
-  }, [stopPolling]);
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const handleFileSelect = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) {
       setError("Please select an image file.");
       return;
     }
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const url = URL.createObjectURL(file);
+    previewUrlRef.current = url;
     setSelectedFile(file);
-    setPreviewUrl(URL.createObjectURL(file));
-    setResult(null);
+    setPreviewUrl(url);
+    setSprites({});
     setError(null);
     setPhase("idle");
   }, []);
@@ -61,71 +59,78 @@ export default function SpriteGenerator() {
       const file = e.dataTransfer.files[0];
       if (file) handleFileSelect(file);
     },
-    [handleFileSelect]
+    [handleFileSelect],
   );
-
-  const pollStatus = useCallback((executionId: string) => {
-    const startTime = Date.now();
-
-    timerRef.current = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startTime) / 1000));
-    }, 1000);
-
-    pollingRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/status?executionId=${executionId}`);
-        const data = await res.json();
-
-        if (data.status === "completed" && data.sprites) {
-          stopPolling();
-          setResult({ success: true, sprites: data.sprites });
-          setPhase("completed");
-          return;
-        }
-
-        if (data.status === "error") {
-          stopPolling();
-          setError(data.error || "Generation failed");
-          setPhase("error");
-          return;
-        }
-      } catch {
-        // Polling error - keep trying
-      }
-    }, 5000);
-  }, [stopPolling]);
 
   const handleGenerate = async () => {
     if (!selectedFile) return;
 
-    stopPolling();
-    setPhase("uploading");
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setPhase("compressing");
     setError(null);
-    setResult(null);
     setElapsed(0);
 
+    const initial: Record<string, SpriteState> = {};
+    for (const { key } of SPRITE_TYPES) {
+      initial[key] = { status: "generating", image: null, error: null };
+    }
+    setSprites(initial);
+
+    let compressed: File;
     try {
-      const formData = new FormData();
-      formData.append("image", selectedFile);
-
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (!data.success) {
-        setError(data.error || "Failed to start generation");
-        setPhase("error");
-        return;
-      }
-
-      setPhase("processing");
-      pollStatus(data.executionId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
+      compressed = await compressImage(selectedFile);
+    } catch {
+      setError("Failed to compress image. Please try a different image.");
       setPhase("error");
+      return;
+    }
+
+    setPhase("processing");
+    const startTime = Date.now();
+    timerRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    const promises = SPRITE_TYPES.map(async ({ key }) => {
+      const formData = new FormData();
+      formData.append("image", compressed);
+      formData.append("spriteType", key);
+
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Generation failed");
+        }
+
+        setSprites((prev) => ({
+          ...prev,
+          [key]: { status: "completed", image: data.image, error: null },
+        }));
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        const message = err instanceof Error ? err.message : "Request failed";
+        setSprites((prev) => ({
+          ...prev,
+          [key]: { status: "error", image: null, error: message },
+        }));
+      }
+    });
+
+    await Promise.allSettled(promises);
+
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (!controller.signal.aborted) {
+      setPhase("completed");
     }
   };
 
@@ -136,7 +141,10 @@ export default function SpriteGenerator() {
     link.click();
   };
 
-  const isLoading = phase === "uploading" || phase === "processing";
+  const isLoading = phase === "compressing" || phase === "processing";
+  const completedCount = Object.values(sprites).filter(
+    (s) => s.status === "completed",
+  ).length;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-12">
@@ -219,25 +227,18 @@ export default function SpriteGenerator() {
         </button>
       </div>
 
-      {/* Loading State */}
+      {/* Progress */}
       {isLoading && (
-        <div className="text-center py-12">
+        <div className="text-center py-4 mb-6">
           <div className="inline-block w-10 h-10 border-4 border-[#2a2a2a] border-t-[#6366f1] rounded-full animate-spin mb-4" />
           <p className="text-[#737373] mb-2">
-            {phase === "uploading"
-              ? "Uploading image..."
-              : "Generating 4 sprite sheets with AI..."}
+            {phase === "compressing"
+              ? "Preparing image..."
+              : `Generating sprite sheets... (${completedCount}/4 completed)`}
           </p>
-          <p className="text-[#525252] text-sm">
-            {elapsed > 0 && `${elapsed}s elapsed`}
-            {phase === "processing" && " - Checking every 5 seconds"}
-          </p>
-          <div className="mt-4 w-64 mx-auto bg-[#1a1a1a] rounded-full h-1.5 overflow-hidden">
-            <div
-              className="h-full bg-[#6366f1] rounded-full transition-all duration-1000"
-              style={{ width: `${Math.min((elapsed / 120) * 100, 95)}%` }}
-            />
-          </div>
+          {elapsed > 0 && (
+            <p className="text-[#525252] text-sm">{elapsed}s elapsed</p>
+          )}
         </div>
       )}
 
@@ -248,14 +249,18 @@ export default function SpriteGenerator() {
         </div>
       )}
 
-      {/* Results */}
-      {result?.sprites && (
+      {/* Sprite Results */}
+      {Object.keys(sprites).length > 0 && (
         <div>
-          <h2 className="text-2xl font-bold mb-6 text-center">Generated Sprite Sheets</h2>
+          <h2 className="text-2xl font-bold mb-6 text-center">
+            {phase === "completed"
+              ? "Generated Sprite Sheets"
+              : "Generating Sprite Sheets..."}
+          </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {SPRITE_TYPES.map(({ key, label, description }) => {
-              const spriteData = result.sprites?.[key];
-              if (!spriteData) return null;
+              const sprite = sprites[key];
+              if (!sprite) return null;
 
               return (
                 <div
@@ -267,21 +272,36 @@ export default function SpriteGenerator() {
                     <p className="text-sm text-[#737373]">{description}</p>
                   </div>
                   <div className="p-4 bg-[#111] flex items-center justify-center min-h-[200px]">
-                    <img
-                      src={spriteData}
-                      alt={`${label} sprite sheet`}
-                      className="max-w-full max-h-[300px] object-contain"
-                      style={{ imageRendering: "pixelated" }}
-                    />
+                    {sprite.status === "generating" && (
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="w-8 h-8 border-3 border-[#2a2a2a] border-t-[#6366f1] rounded-full animate-spin" />
+                        <span className="text-[#737373] text-sm">
+                          Generating {label}...
+                        </span>
+                      </div>
+                    )}
+                    {sprite.status === "completed" && sprite.image && (
+                      <img
+                        src={sprite.image}
+                        alt={`${label} sprite sheet`}
+                        className="max-w-full max-h-[300px] object-contain"
+                        style={{ imageRendering: "pixelated" }}
+                      />
+                    )}
+                    {sprite.status === "error" && (
+                      <p className="text-red-400 text-sm">{sprite.error}</p>
+                    )}
                   </div>
-                  <div className="p-3 border-t border-[#2a2a2a]">
-                    <button
-                      onClick={() => handleDownload(spriteData, key)}
-                      className="w-full py-2 rounded-lg bg-[#2a2a2a] hover:bg-[#3a3a3a] transition-colors text-sm font-medium cursor-pointer"
-                    >
-                      Download {label} Sheet
-                    </button>
-                  </div>
+                  {sprite.status === "completed" && sprite.image && (
+                    <div className="p-3 border-t border-[#2a2a2a]">
+                      <button
+                        onClick={() => handleDownload(sprite.image!, key)}
+                        className="w-full py-2 rounded-lg bg-[#2a2a2a] hover:bg-[#3a3a3a] transition-colors text-sm font-medium cursor-pointer"
+                      >
+                        Download {label} Sheet
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
